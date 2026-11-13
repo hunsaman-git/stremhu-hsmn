@@ -7,6 +7,7 @@ from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from rich.console import Console
 
+from app.common.session_secret import load_session_secret
 from app.common.validators import validate_domain
 
 
@@ -28,7 +29,7 @@ class Config(BaseSettings):
     node_env: NodeEnv = NodeEnv.PROD
     version: str = "0.0.0"
     description: str = "Torrentalapú streaming magyar torrentoldalakra építve."
-    session_secret: str = "stremhu-source"
+    session_secret: str = Field(default_factory=load_session_secret)
     host_ip: str = Field(
         default="",
     )

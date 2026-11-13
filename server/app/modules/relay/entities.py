@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import math
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
@@ -124,7 +123,7 @@ class Torrent:
 
         target_deadlines: dict[int, int] = {}
 
-        for file in self.files.values():
+        for file in list(self.files.values()):
             if not file.has_active_streams:
                 continue
 
@@ -275,13 +274,7 @@ class Stream:
 
     async def destroy(self):
         self.is_destroying = True
-        self.torrent.service.trigger_priority_update(self.torrent.info_hash)
-
-        await asyncio.sleep(0.25)
-
-        if self.id in self.file.streams:
-            del self.file.streams[self.id]
-
+        self.file.streams.pop(self.id, None)
         self.torrent.service.trigger_priority_update(self.torrent.info_hash)
 
     def _get_byte_to_piece(
@@ -369,4 +362,4 @@ class Stream:
         except Exception:
             logger.exception("Hiba történt a fájl streamelése közben.")
         finally:
-            asyncio.create_task(self.destroy())
+            await self.destroy()

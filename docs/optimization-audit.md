@@ -18,13 +18,13 @@ penetrációs teszt, és nem igazolja a külső torrentoldalak működését.
 | SEC-02 | Magas | `authorize_pairing_code` LINKED állapotot is felülír, így egy másik bejelentkezett felhasználó ugyanazt az aktív kódot újra saját magához kapcsolhatja. | Egyszeri, feltételes SQL UPDATE PENDING állapotra; ismételt és párhuzamos jóváhagyás tesztje, séma-változtatás nélkül. |
 | SEC-03 | Közepes | Párosító kód `random.choices` útján készül; a generátor nem kriptográfiai célra való. | `secrets.choice`; a négyjegyű protokoll megtartása. Rate limit külön tervezendő. |
 | SEC-04 | Közepes | `main.py`: a cookie max_age ezerszerese a komment szerinti 30 napnak (másodperc helyett ezredmásodperc). | 30 nap másodpercben, a tényleges Set-Cookie ellenőrzésével. |
-| DB-01 | Közepes | `TorrentFilesRepository.touch/find_list`: azonosítónként OR ág; 1100 azonosítóval SQLite expression tree limit túlléphető. | Összetett kulcsokra tuple IN és korlátozott méretű batch; 1100 rekordos teszt, meglévő throttle/lock tesztek megtartása. |
+| DB-01 | Közepes | `TorrentFilesRepository.touch/find_list`: azonosítónként OR ág; 1100 azonosítóval SQLite expression tree limit túlléphető. | Legfeljebb 400 azonosítós batch, az indexelt OR feltételek és a throttle megtartásával; 1100 azonosítós teszt. |
 | DB-02 | Megfigyelés | A stream router sessionje a tracker hálózati várakozása alatt is él; több service ugyanazt a sessiont to_thread hívásokban használja. Nincs ebben az auditban reprodukált korrupció. | Külön későbbi tranzakció-élettartam refaktor, csatlakozásszám- és lockmérés után. Ne vezessünk be vaktában timeout/WAL/sémamódosítást. |
 | SEC-05 | Tervezési kockázat | Login/pair init/verify nincs alkalmazásszintű rate limittel védve; négyjegyű kódterület kicsi. | Proxy- és alkalmazásszintű korlát tervezése, megosztott IP és Kodi polling kompatibilitásának mérésével. |
 | SEC-06 | Tervezési kockázat | Tracker jelszó, cookie, TOTP és hálózati privát kulcs az SQLite-ban található. A helyi tanúsítvány publikus privát kulcsot használhat. | Titoktárolás és TLS modell külön migrációs tervvel; a meglévő mentések és helyi kliensek miatt ne cseréljük hallgatólagosan. |
 | SEC-07 | Vizsgálandó | Első admin regisztráció count-then-create; párhuzamos első regisztráció versenyhelyzet lehet. Stream token nincs felhasználóhoz/lejárathoz kötve; lejátszási limit ellenőrzés és foglalás külön történik. | Több kéréses integrációs reprodukció szükséges; API- és tokenkompatibilitás miatt külön változáscsomag. |
-| NET-01 | Bizonyított blokkoló műveletek | `ssl/service.py`: szinkron DNS resolver és ACME kliens async metódusokban. | Későbbi worker szálra szervezés mockolt ACME/DNS tesztekkel; valós DNS/ACME itt nincs meghívva. |
-| CLI-01 | Alacsony | Négy felesleges TypeScript assertion a preferencia-űrlapokon; az ESLint hibával kilép. | Eltávolítás, build/tsc és ESLint újrafuttatása. |
+| NET-01 | Teljesítménykockázat | `ssl/service.py`: szinkron DNS resolver és ACME kliens async metódusokban; a lehetséges eseményhurok-késleltetés itt nem volt mérve. | Későbbi worker szálra szervezés mockolt ACME/DNS tesztekkel; valós DNS/ACME itt nincs meghívva. |
+| CLI-01 | Alacsony | Négy felesleges TypeScript assertion a preferencia-űrlapokon; az ESLint hibával kilép. | Explicit típusú defaultValues változók, build/tsc és ESLint újrafuttatása; az üres string lista típusa megmarad. |
 | DOCKER-01 | Fejlesztési lehetőség | Node stage a teljes clientet másolja npm ci előtt, runtime apt upgrade változó eredményű; dev eszközök a runtime requirements-ben. | Build cache és runtime méret külön mérendő; ebben a javításban a Dockerfile, portok, data útvonal és CMD változatlan. |
 | DOCKER-02 | Ellenőrzési igény | GHCR workflow amd64/arm64 buildet és push-t futtat mainen. | Csak helyi build/smoke, ha a helyi daemon elérhető; nincs image push, main merge vagy éles telepítés. arm64 ellenőrzés külön jelölendő. |
 
@@ -61,4 +61,46 @@ penetrációs teszt, és nem igazolja a külső torrentoldalak működését.
 
 ## Ellenőrzési napló
 
-A tényleges futtatási eredmények a javítások után kerülnek ebbe a szakaszba.
+Elkészült javítások: SEC-01/02/03/04, HTTP-01/02, RELAY-01/02/03,
+DB-01, CLI-01. A többi sor külön következő feladatként kezelendő;
+nem állítjuk, hogy minden tervezési kockázat megszűnt.
+
+| Ellenőrzés | Eredmény |
+| --- | --- |
+| Eredeti backend | 157 teszt, 64 snapshot sikeres. |
+| Új HTTP/relay/SQLite regressziók az eredeti kódon | 25 hibás, 17 sikeres; a javítás után mind a 42 sikeres. |
+| Teljes backend a javítás után | 206 sikeres teszt, 64 sikeres snapshot; egy meglévő libtorrent `piece_priorities()` deprecation warning. |
+| Natív torrent streaming | Helyi, SHA-1 ellenőrzött két darabos torrent, valódi libtorrent alert/olvasási útvonal; a 100..20000 bájt pontosan visszaérkezik, nincs tracker/peer hozzáférés. |
+| Adatbázis-kompatibilitás | Ideiglenes SQLite: korábbi `3a7b9c1d2e3f` revision → head → ismételt head; jelszóhash, API-kulcs és felhasználó megmarad, integrity_check=ok, foreign_key_check üres. |
+| Backend statikus ellenőrzés | Ruff sikeres; Basedpyright: 0 hiba, 0 figyelmeztetés. |
+| Kliens | ESLint és `npm run build` (Vite + tsc) sikeres; Vite nagy chunk figyelmeztetése megmaradt. Nincs meglévő kliens npm test script, ezért kliens unit tesztfutást nem állítunk. |
+| Docker amd64 | Sikeres helyi build és konténeres health/frontend/OpenAPI smoke. Restart után ismét sikeres health, a privát 0600-as aláírókulcs fájl változatlan. A tesztkonténer leállítva és eltávolítva. |
+| Docker-kontraktus | Dockerfile, .dockerignore, dependency manifestek/lockfile-ok, Alembic migrációk és ORM sémák változatlanok. Nincs image push vagy éles deploy. |
+
+Reprodukálható fő parancsok:
+
+```sh
+cd /workspace/stremhu-hsmn/server
+HOST_IP=192.168.1.100 /workspace/stremhu-venv/bin/python -m pytest -q
+/workspace/stremhu-venv/bin/ruff check .
+HOST_IP=192.168.1.100 /workspace/stremhu-venv/bin/basedpyright --pythonpath /workspace/stremhu-venv/bin/python
+cd ../client
+npm run lint
+npm run build
+```
+
+A felhő saját HTTPS proxy CA-ját a Docker ellenőrzés ideiglenes, checkouton
+kívüli Dockerfile-jában BuildKit secret mount adta át az npm és pip lépésnek.
+TLS és checksum ellenőrzés végig bekapcsolva maradt; a CA nem került image
+rétegbe vagy a repositoryba. A build context csak verziókezelt fájlokat és
+az új Python modult tartalmazta, nem a fejlesztői cache-eket vagy a helyi data
+könyvtárat. A Dockerfile-ban megmaradt minden eredeti telepítési/startup lépés.
+Arm64 build és XPEnology NAS teljesítmény-/hálózati terhelésteszt nem futott.
+
+Áttekintési határ: a teljes backend/frontend fájlkészletet érintő keresések,
+lint/typecheck és a meglévő tesztek mellett a kézi vizsgálat a streaming,
+relay, auth/session/pairing, SQLite repository/session/migráció, tracker
+alaposztály/provider, kliens API/űrlapok és Docker/CI útvonalakra koncentrált.
+Ez nem jelenti minden adapter külső rendszerrel végzett tesztjét vagy minden
+forrássor formális ellenőrzését. A tracker, DDNS és ACME fiókok nem voltak
+használva, az éles szerverhez nem történt kapcsolatfelvétel.

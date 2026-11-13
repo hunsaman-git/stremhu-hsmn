@@ -1,5 +1,5 @@
 import datetime
-import random
+import secrets
 import uuid
 
 from fastapi import HTTPException, status
@@ -22,7 +22,7 @@ class PairingsService:
 
         # Loop until we get a unique userCode within the active timeframes
         while not is_unique:
-            user_code = "".join(random.choices("0123456789", k=4))
+            user_code = "".join(secrets.choice("0123456789") for _ in range(4))
             existing = self._pairings_repository.find_by_user_code(user_code)
             if not existing:
                 is_unique = True
@@ -91,9 +91,11 @@ class PairingsService:
                 detail="A kód már lejárt!",
             )
 
-        pairing.status = PairingStatusEnum.LINKED
-        pairing.user_id = user.id
-        self._pairings_repository.create(pairing)
+        if not self._pairings_repository.authorize_pending(pairing.id, user.id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A párosítási kód már felhasznált vagy lejárt.",
+            )
 
         return Success(success=True)
 

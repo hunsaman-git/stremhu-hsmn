@@ -96,6 +96,7 @@ class RelayService:
 
         self._piece_fetch_tasks: dict[tuple[str, int], asyncio.Task[bytes]] = {}
         self._pending_piece_reads: dict[tuple[str, int], asyncio.Future[bytes]] = {}
+        self._piece_waiters: dict[tuple[str, int], int] = {}
 
         # Event hooks for resume data management (Observer Pattern)
         self.on_save_resume: list[Callable[[str, bytes], None]] = []
@@ -208,7 +209,21 @@ class RelayService:
             )
             self._piece_fetch_tasks[request_key] = task
 
-        return await asyncio.shield(task)
+        self._piece_waiters[request_key] = self._piece_waiters.get(request_key, 0) + 1
+        try:
+            return await asyncio.shield(task)
+        finally:
+            remaining = self._piece_waiters[request_key] - 1
+            if remaining:
+                self._piece_waiters[request_key] = remaining
+            else:
+                self._piece_waiters.pop(request_key)
+                if not task.done():
+                    # Preserve singleflight for other clients, but do not keep
+                    # a shielded download alive after every client has left.
+                    if self._piece_fetch_tasks.get(request_key) is task:
+                        self._piece_fetch_tasks.pop(request_key)
+                    task.cancel()
 
     async def _fetch_piece_with_retry(
         self,
@@ -241,10 +256,9 @@ class RelayService:
         future: asyncio.Future[bytes] = self._loop.create_future()
         self._pending_piece_reads[request_key] = future
 
-        if torrent_handle.have_piece(piece_index):
-            torrent_handle.read_piece(piece_index)
-
         try:
+            if torrent_handle.have_piece(piece_index):
+                torrent_handle.read_piece(piece_index)
             return await future
         finally:
             if self._pending_piece_reads.get(request_key) is future:

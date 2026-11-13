@@ -36,6 +36,7 @@ def make_service(loop: asyncio.AbstractEventLoop) -> RelayService:
     service._loop = loop
     service._piece_fetch_tasks = {}
     service._pending_piece_reads = {}
+    service._piece_waiters = {}
     return service
 
 
@@ -82,6 +83,43 @@ def test_concurrent_waiters_share_same_task_and_deduplicate():
         # A Task lezárultával a belső állapotok kitisztulnak
         assert service._piece_fetch_tasks == {}
         assert service._pending_piece_reads == {}
+
+    asyncio.run(scenario())
+
+
+def test_last_waiter_cancellation_releases_pending_read():
+    async def scenario():
+        service = make_service(asyncio.get_running_loop())
+        handle = cast(libtorrent.torrent_handle, FakeHandle())
+        waiter = asyncio.create_task(service.get_piece_data(handle, PIECE_INDEX))
+        while KEY not in service._pending_piece_reads:
+            await asyncio.sleep(0)
+        task = service._piece_fetch_tasks[KEY]
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        await asyncio.sleep(0)
+        assert task.done()
+        assert service._piece_fetch_tasks == {}
+        assert service._pending_piece_reads == {}
+        assert service._piece_waiters == {}
+
+    asyncio.run(scenario())
+
+
+def test_synchronous_read_error_releases_pending_future():
+    class BrokenHandle(FakeHandle):
+        def read_piece(self, piece_index):
+            raise RuntimeError("removed handle")
+
+    async def scenario():
+        service = make_service(asyncio.get_running_loop())
+        with pytest.raises(RuntimeError, match="removed handle"):
+            await service.get_piece_data(
+                cast(libtorrent.torrent_handle, BrokenHandle()), PIECE_INDEX
+            )
+        assert service._pending_piece_reads == {}
+        assert service._piece_fetch_tasks == {}
 
     asyncio.run(scenario())
 

@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.common.database import Base, connect_args
 from app.modules.torrent_files.repository import TOUCH_THROTTLE, TorrentFilesRepository
-from app.modules.torrent_files.schemas import TorrentFileIdentifier
+from app.modules.torrent_files.schemas import TorrentFileIdentifier, TorrentFilesFilter
 
 IDENTIFIER = TorrentFileIdentifier(indexer_id="ncore", torrent_id="3374373")
 
@@ -122,4 +122,19 @@ def test_touch_is_thread_safe_for_offloaded_calls(session_factory):
         thread.join()
 
     assert errors == []
+    assert read_last_used_at(session_factory) > stale
+
+
+def test_large_identifier_lists_do_not_exceed_sqlite_expression_limit(session_factory):
+    stale = datetime.datetime.now() - TOUCH_THROTTLE * 2
+    seed(session_factory, stale)
+    identifiers = [
+        TorrentFileIdentifier(indexer_id="ncore", torrent_id=str(i))
+        for i in range(1100)
+    ] + [IDENTIFIER]
+    with session_factory() as db:
+        repo = TorrentFilesRepository(db)
+        assert len(repo.find_list(TorrentFilesFilter(identifiers=identifiers))) == 1
+        repo.touch(identifiers)
+        db.commit()
     assert read_last_used_at(session_factory) > stale

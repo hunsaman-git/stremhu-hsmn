@@ -7,6 +7,7 @@ from app.modules.torrent_files.models import TorrentFileModel
 from app.modules.torrent_files.schemas import TorrentFileIdentifier, TorrentFilesFilter
 
 TOUCH_THROTTLE = datetime.timedelta(minutes=15)
+IDENTIFIER_BATCH_SIZE = 400
 
 
 class TorrentFilesRepository:
@@ -22,6 +23,28 @@ class TorrentFilesRepository:
         self,
         filter: TorrentFilesFilter | None = None,
     ) -> list[TorrentFileModel]:
+        if filter and filter.identifiers is not None:
+            identifiers = list(
+                {
+                    (item.indexer_id, item.torrent_id): item
+                    for item in filter.identifiers
+                }.values()
+            )
+            filter = filter.model_copy(update={"identifiers": identifiers})
+            if len(identifiers) > IDENTIFIER_BATCH_SIZE:
+                return [
+                    model
+                    for offset in range(0, len(identifiers), IDENTIFIER_BATCH_SIZE)
+                    for model in self.find_list(
+                        filter.model_copy(
+                            update={
+                                "identifiers": identifiers[
+                                    offset : offset + IDENTIFIER_BATCH_SIZE
+                                ]
+                            }
+                        )
+                    )
+                ]
         query = self.db.query(TorrentFileModel).options(
             joinedload(TorrentFileModel.indexer_account)
         )
@@ -84,6 +107,10 @@ class TorrentFilesRepository:
         identifiers_list = (
             identifiers if isinstance(identifiers, list) else [identifiers]
         )
+        if len(identifiers_list) > IDENTIFIER_BATCH_SIZE:
+            for offset in range(0, len(identifiers_list), IDENTIFIER_BATCH_SIZE):
+                self.touch(identifiers_list[offset : offset + IDENTIFIER_BATCH_SIZE])
+            return
 
         now = datetime.datetime.now()
         stale_filter = and_(

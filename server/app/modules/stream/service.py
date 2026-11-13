@@ -1,4 +1,5 @@
 import asyncio
+import re
 
 from fastapi import HTTPException
 
@@ -181,28 +182,43 @@ class StreamService:
                 content_length=file_size,
             )
 
-        if not range_header.startswith("bytes="):
-            raise HTTPException(416, "Érvénytelen range header.")
+        def invalid_range() -> HTTPException:
+            return HTTPException(
+                416,
+                "Érvénytelen vagy nem teljesíthető range header.",
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
 
-        range_value = range_header.replace("bytes=", "", 1).strip()
-        if "," in range_value:
-            raise HTTPException(416, "A több tartomány nem támogatott.")
+        match = re.fullmatch(r"bytes=([0-9]*)-([0-9]*)", range_header.strip())
+        if match is None or file_size == 0:
+            raise invalid_range()
+        start_byte_str, end_byte_str = match.groups()
 
-        start_byte_str, end_byte_str = range_value.split("-", 1)
+        # Leading zeroes are legal; cap significant digits before int() so a
+        # malicious header cannot trigger Python's integer conversion limit.
+        start_byte_str = start_byte_str.lstrip("0") or ("0" if start_byte_str else "")
+        end_byte_str = end_byte_str.lstrip("0") or ("0" if end_byte_str else "")
+        size_digits = len(str(file_size))
+        if len(start_byte_str) > size_digits:
+            raise invalid_range()
+        # A huge end/suffix is equivalent to the file size for a single range.
+        if len(end_byte_str) > size_digits:
+            end_byte_str = str(file_size)
 
         if start_byte_str == "":
             if not end_byte_str:
-                raise HTTPException(416, "Érvénytelen range header.")
+                raise invalid_range()
 
             suffix_length = int(end_byte_str)
             if suffix_length <= 0:
-                raise HTTPException(416, "Érvénytelen range header.")
+                raise invalid_range()
 
             start_byte = max(file_size - suffix_length, 0)
             end_byte = file_size - 1
         else:
             start_byte = int(start_byte_str)
             end_byte = int(end_byte_str) if end_byte_str else file_size - 1
+            end_byte = min(end_byte, file_size - 1)
 
         if (
             start_byte < 0
@@ -210,7 +226,7 @@ class StreamService:
             or start_byte > end_byte
             or end_byte >= file_size
         ):
-            raise HTTPException(416, "A kért tartomány kívül esik a fájlon.")
+            raise invalid_range()
 
         content_length = end_byte - start_byte + 1
 

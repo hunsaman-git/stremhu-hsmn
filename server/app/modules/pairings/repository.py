@@ -2,6 +2,7 @@ import datetime
 
 from sqlalchemy.orm import Session
 
+from app.modules.pairings.enums import PairingStatusEnum
 from app.modules.pairings.models import PairingModel
 
 
@@ -19,6 +20,25 @@ class PairingsRepository:
         self.db.add(pairing)
         self.db.flush()
         return pairing
+
+    def authorize_pending(self, pairing_id: str, user_id: str) -> bool:
+        """Claim a code once, including across concurrent database sessions."""
+        updated = (
+            self.db.query(PairingModel)
+            .filter(
+                PairingModel.id == pairing_id,
+                PairingModel.status == PairingStatusEnum.PENDING,
+                PairingModel.expires_at >= datetime.datetime.now(),
+            )
+            .update(
+                {
+                    PairingModel.status: PairingStatusEnum.LINKED,
+                    PairingModel.user_id: user_id,
+                },
+                synchronize_session="fetch",
+            )
+        )
+        return updated == 1
 
     def delete(self, pairing: PairingModel) -> None:
         self.db.delete(pairing)
